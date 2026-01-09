@@ -5,6 +5,11 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error, r2_score
+import os
+
+
+os.makedirs("output", exist_ok=True)
+
 
 # Load dataset
 df = pd.read_csv("data/winequality-red.csv", sep=";")
