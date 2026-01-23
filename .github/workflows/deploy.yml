@@ -1,67 +1,63 @@
-name: CI-CD Wine Model Deployment
+name: Deploy Model (CD)
 
 on:
-  push:
-    branches:
-      - main
+  workflow_run:
+    workflows: ["Train Model (CI)"]
+    types:
+      - completed
 
 jobs:
-  train:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
-      - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
-
-      - name: Train model
-        run: |
-          python scripts/train.py
-
-      - name: Upload model artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: model-artifact
-          path: model.pkl
-
-      - name: Upload metrics artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: metrics-artifact
-          path: metrics.json
-
   deploy:
-    needs: train
+    # Run deploy ONLY if train workflow succeeded
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
 
     steps:
+      # -----------------------------
+      # 1. Checkout repository
+      # -----------------------------
       - name: Checkout code
         uses: actions/checkout@v4
 
+      # -----------------------------
+      # 2. Download model artifact
+      # -----------------------------
       - name: Download model artifact
         uses: actions/download-artifact@v4
         with:
           name: model-artifact
+          run-id: ${{ github.event.workflow_run.id }}
 
+      # -----------------------------
+      # 3. Download metrics artifact
+      # -----------------------------
       - name: Download metrics artifact
         uses: actions/download-artifact@v4
         with:
           name: metrics-artifact
+          run-id: ${{ github.event.workflow_run.id }}
 
+      # -----------------------------
+      # 4. Verify required files
+      # -----------------------------
+      - name: Verify artifacts
+        run: |
+          ls -l
+          test -f model.pkl || (echo "❌ model.pkl missing" && exit 1)
+          test -f metrics.json || (echo "❌ metrics.json missing" && exit 1)
+
+      # -----------------------------
+      # 5. Read metrics
+      # -----------------------------
       - name: Read metrics
         id: metrics
         run: |
-          echo "MSE=$(jq .mse metrics.json)" >> $GITHUB_ENV
           echo "R2=$(jq .r2 metrics.json)" >> $GITHUB_ENV
+          echo "MSE=$(jq .mse metrics.json)" >> $GITHUB_ENV
 
+      # -----------------------------
+      # 6. Compare with BEST metrics
+      # -----------------------------
       - name: Compare metrics
         run: |
           echo "Current R2: $R2"
@@ -72,25 +68,42 @@ jobs:
             exit 0
           fi
 
-      - name: Move model into app folder
-        run: |
-          mv model.pkl app/model.pkl
+      # -----------------------------
+      # 7. Prepare app folder
+      # -----------------------------
+      - name: Ensure app directory exists
+        run: mkdir -p app
 
+      - name: Move model into app folder
+        run: mv model.pkl app/model.pkl
+
+      # -----------------------------
+      # 8. Login to Docker Hub
+      # -----------------------------
       - name: Login to Docker Hub
         run: |
           echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login \
           -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
 
+      # -----------------------------
+      # 9. Build Docker image
+      # -----------------------------
       - name: Build Docker image
         run: |
           docker build -t \
           ${{ secrets.DOCKERHUB_USERNAME }}/wine_predict_2022bcs0057:latest .
 
+      # -----------------------------
+      # 10. Push Docker image
+      # -----------------------------
       - name: Push Docker image
         run: |
           docker push \
           ${{ secrets.DOCKERHUB_USERNAME }}/wine_predict_2022bcs0057:latest
 
+      # -----------------------------
+      # 11. Update BEST_R2 variable
+      # -----------------------------
       - name: Update BEST_R2 variable
         run: |
           curl -X PATCH \
