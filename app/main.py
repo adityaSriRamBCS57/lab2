@@ -4,7 +4,7 @@ import joblib
 import numpy as np
 
 
-# 
+
 model = joblib.load("app/model.pkl")
 
 app = FastAPI(title="Wine Quality Predictor")
