@@ -1,0 +1,100 @@
+name: CI-CD Wine Model Deployment
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Train model
+        run: |
+          python scripts/train.py
+
+      - name: Upload model artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: model-artifact
+          path: model.pkl
+
+      - name: Upload metrics artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: metrics-artifact
+          path: metrics.json
+
+  deploy:
+    needs: train
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download model artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: model-artifact
+
+      - name: Download metrics artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: metrics-artifact
+
+      - name: Read metrics
+        id: metrics
+        run: |
+          echo "MSE=$(jq .mse metrics.json)" >> $GITHUB_ENV
+          echo "R2=$(jq .r2 metrics.json)" >> $GITHUB_ENV
+
+      - name: Compare metrics
+        run: |
+          echo "Current R2: $R2"
+          echo "Best R2: ${{ vars.BEST_R2 }}"
+
+          if (( $(echo "$R2 <= ${{ vars.BEST_R2 }}" | bc -l) )); then
+            echo "2022BCS0057 ---- Metric did not improve"
+            exit 0
+          fi
+
+      - name: Move model into app folder
+        run: |
+          mv model.pkl app/model.pkl
+
+      - name: Login to Docker Hub
+        run: |
+          echo "${{ secrets.DOCKERHUB_TOKEN }}" | docker login \
+          -u "${{ secrets.DOCKERHUB_USERNAME }}" --password-stdin
+
+      - name: Build Docker image
+        run: |
+          docker build -t \
+          ${{ secrets.DOCKERHUB_USERNAME }}/wine_predict_2022bcs0057:latest .
+
+      - name: Push Docker image
+        run: |
+          docker push \
+          ${{ secrets.DOCKERHUB_USERNAME }}/wine_predict_2022bcs0057:latest
+
+      - name: Update BEST_R2 variable
+        run: |
+          curl -X PATCH \
+          -H "Authorization: Bearer ${{ secrets.GH_PAT }}" \
+          -H "Accept: application/vnd.github+json" \
+          https://api.github.com/repos/${{ github.repository }}/actions/variables/BEST_R2 \
+          -d "{\"name\":\"BEST_R2\",\"value\":\"$R2\"}"
