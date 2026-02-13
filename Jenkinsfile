@@ -9,13 +9,6 @@ pipeline {
 
     stages {
 
-        stage('Checkout') {
-            steps {
-                git credentialsId: 'git-creds',
-                    url: 'https://github.com/<your-username>/<your-repo>.git'
-            }
-        }
-
         stage('Setup Python Virtual Environment') {
             steps {
                 sh '''
