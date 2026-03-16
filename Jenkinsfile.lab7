@@ -99,21 +99,17 @@ pipeline {
                 '''
             }
         }
-
-        stage('Stop Container') {
-            steps {
-                sh '''
-                echo "Stopping container..."
-                docker stop $CONTAINER || true
-                docker rm $CONTAINER || true
-                '''
-            }
-        }
     }
 
     post {
+
         always {
-            sh 'docker ps'
+            sh '''
+            echo "Cleaning up container..."
+            docker stop $CONTAINER || true
+            docker rm $CONTAINER || true
+            docker ps
+            '''
         }
 
         success {
