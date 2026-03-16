@@ -1,0 +1,83 @@
+pipeline {
+    agent any
+
+    environment {
+        IMAGE = "adityasr57/wine_predict_2022bcs0057:latest"
+        CONTAINER = "wine_test_container"
+        API_URL = "http://localhost:8000/predict"
+    }
+
+    stages {
+
+        stage('Pull Image') {
+            steps {
+                sh 'docker pull $IMAGE'
+            }
+        }
+
+        stage('Run Container') {
+            steps {
+                sh '''
+                docker run -d --rm \
+                  -p 8000:8000 \
+                  --name $CONTAINER \
+                  $IMAGE
+                '''
+            }
+        }
+
+        stage('Wait for API Readiness') {
+            steps {
+                sh '''
+                for i in {1..10}; do
+                  if curl -s http://localhost:8000/docs > /dev/null; then
+                    echo "API is ready"
+                    exit 0
+                  fi
+                  sleep 3
+                done
+                echo "API did not start"
+                exit 1
+                '''
+            }
+        }
+
+        stage('Send Valid Inference Request') {
+            steps {
+                sh '''
+                RESPONSE=$(curl -s -X POST $API_URL \
+                  -H "Content-Type: application/json" \
+                  -d "$(jq -c .valid test_inputs.json)")
+
+                echo "Valid response: $RESPONSE"
+
+                echo $RESPONSE | jq -e '.wine_quality' > /dev/null
+                '''
+            }
+        }
+
+        stage('Send Invalid Request') {
+            steps {
+                sh '''
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                  -X POST $API_URL \
+                  -H "Content-Type: application/json" \
+                  -d "$(jq -c .invalid test_inputs.json)")
+
+                echo "Invalid request status: $STATUS"
+
+                if [ "$STATUS" -eq 200 ]; then
+                  echo "Invalid input should not succeed"
+                  exit 1
+                fi
+                '''
+            }
+        }
+
+        stage('Stop Container') {
+            steps {
+                sh 'docker stop $CONTAINER || true'
+            }
+        }
+    }
+}
