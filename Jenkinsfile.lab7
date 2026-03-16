@@ -11,17 +11,25 @@ pipeline {
 
         stage('Pull Image') {
             steps {
-                sh 'docker pull $IMAGE'
+                sh '''
+                echo "Pulling latest Docker image..."
+                docker pull $IMAGE
+                '''
             }
         }
 
         stage('Run Container') {
             steps {
                 sh '''
-                docker run -d --rm \
+                echo "Starting container..."
+                docker rm -f $CONTAINER || true
+
+                docker run -d \
                   -p 8000:8000 \
                   --name $CONTAINER \
                   $IMAGE
+
+                docker ps
                 '''
             }
         }
@@ -29,14 +37,21 @@ pipeline {
         stage('Wait for API Readiness') {
             steps {
                 sh '''
-                for i in {1..10}; do
-                  if curl -s http://localhost:8000/docs > /dev/null; then
-                    echo "API is ready"
-                    exit 0
-                  fi
-                  sleep 3
+                echo "Waiting for API to start..."
+
+                for i in {1..20}
+                do
+                    if curl -s http://localhost:8000/docs > /dev/null; then
+                        echo "API is ready"
+                        exit 0
+                    fi
+
+                    echo "Waiting..."
+                    sleep 2
                 done
-                echo "API did not start"
+
+                echo "API did not start in time"
+                docker logs $CONTAINER
                 exit 1
                 '''
             }
@@ -45,13 +60,20 @@ pipeline {
         stage('Send Valid Inference Request') {
             steps {
                 sh '''
-                RESPONSE=$(curl -s -X POST $API_URL \
-                  -H "Content-Type: application/json" \
-                  -d "$(jq -c .valid test_inputs.json)")
+                echo "Sending valid inference request..."
 
-                echo "Valid response: $RESPONSE"
+                RESPONSE=$(curl -s -X POST $API_URL \
+                    -H "Content-Type: application/json" \
+                    -d "$(jq -c .valid test_inputs.json)")
+
+                echo "API response:"
+                echo $RESPONSE
+
+                echo $RESPONSE | jq '.'
 
                 echo $RESPONSE | jq -e '.wine_quality' > /dev/null
+
+                echo "Valid request check passed"
                 '''
             }
         }
@@ -59,25 +81,47 @@ pipeline {
         stage('Send Invalid Request') {
             steps {
                 sh '''
-                STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
-                  -X POST $API_URL \
-                  -H "Content-Type: application/json" \
-                  -d "$(jq -c .invalid test_inputs.json)")
+                echo "Sending invalid request..."
 
-                echo "Invalid request status: $STATUS"
+                STATUS=$(curl -s -o /dev/null -w "%{http_code}" \
+                    -X POST $API_URL \
+                    -H "Content-Type: application/json" \
+                    -d "$(jq -c .invalid test_inputs.json)")
+
+                echo "Returned HTTP status: $STATUS"
 
                 if [ "$STATUS" -eq 200 ]; then
-                  echo "Invalid input should not succeed"
-                  exit 1
+                    echo "Invalid request should not succeed!"
+                    exit 1
                 fi
+
+                echo "Invalid request correctly rejected"
                 '''
             }
         }
 
         stage('Stop Container') {
             steps {
-                sh 'docker stop $CONTAINER || true'
+                sh '''
+                echo "Stopping container..."
+                docker stop $CONTAINER || true
+                docker rm $CONTAINER || true
+                '''
             }
+        }
+    }
+
+    post {
+        always {
+            sh 'docker ps'
+        }
+
+        success {
+            echo "Pipeline completed successfully: model inference validated."
+        }
+
+        failure {
+            echo "Pipeline failed: validation checks did not pass."
         }
     }
 }
